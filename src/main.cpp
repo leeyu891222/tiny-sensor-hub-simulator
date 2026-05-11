@@ -9,6 +9,9 @@
 #include "host_protocol.h"
 #include "display_service.h"
 #include "event_manager.h"
+#include "host_interrupt.h"
+#include "event_log.h"
+#include "classifier_model.h"
 
 
 
@@ -144,7 +147,16 @@ void InferenceTask(void* parameter) {
     FeatureWindow feature;
 
     if (xQueueReceive(featureQueue, &feature, portMAX_DELAY) == pdTRUE) {
-      InferenceResult result = ClassifierRule_Run(feature);
+      ClassifierMode classifierMode = SystemState_GetClassifierMode();
+
+      InferenceResult result;
+
+      if (classifierMode == CLASSIFIER_MODEL) {
+        result = ClassifierModel_Run(feature);
+      } else {
+        result = ClassifierRule_Run(feature);
+      }
+
       SystemState_UpdateLastInference(result);
 
       xQueueSend(inferenceQueue, &result, portMAX_DELAY);
@@ -184,13 +196,16 @@ void setup() {
   bool stateOk = SystemState_Init();
   SensorSim_Init();
   EventManager_Init();
+  EventLog_Init();
+
   bool displayOk = DisplayService_Init();
+  bool hostInterruptOk = HostInterrupt_Init();
 
   sampleQueue = xQueueCreate(APP_SAMPLE_QUEUE_LEN, sizeof(SensorSample));
   featureQueue = xQueueCreate(APP_FEATURE_QUEUE_LEN, sizeof(FeatureWindow));
   inferenceQueue = xQueueCreate(APP_INFERENCE_QUEUE_LEN, sizeof(InferenceResult));
 
-  if (!stateOk || !displayOk ||
+  if (!stateOk || !displayOk || !hostInterruptOk ||
       sampleQueue == nullptr || featureQueue == nullptr || inferenceQueue == nullptr) {
     Serial.println("Failed to create RTOS objects");
     while (true) {
@@ -255,6 +270,16 @@ void setup() {
     APP_STACK_EVENT_MANAGER_TASK,
     nullptr,
     APP_PRIO_EVENT_MANAGER_TASK,
+    nullptr,
+    1
+  );
+
+  xTaskCreatePinnedToCore(
+    HostInterruptTask,
+    "HostInterruptTask",
+    2048,
+    nullptr,
+    3,
     nullptr,
     1
   );

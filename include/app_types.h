@@ -27,6 +27,17 @@ enum SensorPattern {
   PATTERN_IMPACT
 };
 
+enum EventReason {
+  EVENT_REASON_FIRST_RESULT = 0,
+  EVENT_REASON_STATE_CHANGE,
+  EVENT_REASON_HIGH_PRIORITY_IMPACT
+};
+
+enum ClassifierMode {
+  CLASSIFIER_RULE = 0,
+  CLASSIFIER_MODEL
+};
+
 // =====================
 // Data structures
 // =====================
@@ -71,6 +82,16 @@ struct SystemStats {
   uint32_t sampleQueueDrops;
 };
 
+struct EventRecord {
+  uint32_t timestampMs;
+  MotionState previousState;
+  MotionState newState;
+  float confidence;
+  float energy;
+  float maxAbs;
+  EventReason reason;
+};
+
 // =====================
 // String helpers
 // =====================
@@ -78,6 +99,9 @@ struct SystemStats {
 const char* modeToString(SystemMode mode);
 const char* motionToString(MotionState state);
 const char* patternToString(SensorPattern pattern);
+const char* eventReasonToString(EventReason reason);
+const char* classifierModeToString(ClassifierMode mode);
 
+bool parseClassifierMode(const String& text, ClassifierMode* modeOut);
 bool parseMode(const String& text, SystemMode* modeOut);
 bool parsePattern(const String& text, SensorPattern* patternOut);

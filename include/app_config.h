@@ -9,6 +9,8 @@
 #define APP_I2C_SDA_PIN 21
 #define APP_I2C_SCL_PIN 22
 
+#define APP_HOST_INT_PIN 19
+
 // =====================
 // OLED config
 // =====================
@@ -50,6 +52,8 @@
 #define APP_BUTTON_DEBOUNCE_RELEASE_MS 30
 #define APP_BUTTON_RELEASE_POLL_MS 10
 
+#define APP_HOST_INT_PULSE_MS 50
+
 // =====================
 // Task stack sizes
 // =====================
@@ -79,3 +83,19 @@
 // =====================
 
 #define APP_MAX_COMMAND_LENGTH 80
+
+// =====================
+// Health monitor config
+// =====================
+
+// Additional tolerance beyond expected feature window time.
+#define APP_HEALTH_INFERENCE_TIMEOUT_MARGIN_MS 2000
+
+// Heap warning threshold.
+#define APP_HEALTH_MIN_FREE_HEAP_BYTES 20000
+
+// =====================
+// Event log config
+// =====================
+
+#define APP_EVENT_LOG_SIZE 10

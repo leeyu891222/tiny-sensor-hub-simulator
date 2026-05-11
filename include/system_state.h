@@ -46,3 +46,10 @@ void SystemState_IncrementInferencesRun();
 void SystemState_IncrementHostNotifications();
 void SystemState_IncrementSuppressedNotifications();
 void SystemState_IncrementSampleQueueDrops();
+
+// =====================
+// Classifier
+// =====================
+
+ClassifierMode SystemState_GetClassifierMode();
+void SystemState_SetClassifierMode(ClassifierMode mode);

@@ -12,8 +12,12 @@ static FeatureWindow g_lastFeature = {};
 static InferenceResult g_lastInference = {};
 static SystemStats g_stats = {};
 
+static ClassifierMode g_classifierMode = CLASSIFIER_RULE;
+
 bool SystemState_Init() {
   g_stateMutex = xSemaphoreCreateMutex();
+
+  g_classifierMode = CLASSIFIER_RULE;
 
   if (g_stateMutex == nullptr) {
     return false;
@@ -161,5 +165,18 @@ void SystemState_IncrementSuppressedNotifications() {
 void SystemState_IncrementSampleQueueDrops() {
   xSemaphoreTake(g_stateMutex, portMAX_DELAY);
   g_stats.sampleQueueDrops++;
+  xSemaphoreGive(g_stateMutex);
+}
+
+ClassifierMode SystemState_GetClassifierMode() {
+  xSemaphoreTake(g_stateMutex, portMAX_DELAY);
+  ClassifierMode mode = g_classifierMode;
+  xSemaphoreGive(g_stateMutex);
+  return mode;
+}
+
+void SystemState_SetClassifierMode(ClassifierMode mode) {
+  xSemaphoreTake(g_stateMutex, portMAX_DELAY);
+  g_classifierMode = mode;
   xSemaphoreGive(g_stateMutex);
 }

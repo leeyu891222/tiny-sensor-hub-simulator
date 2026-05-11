@@ -1,20 +1,26 @@
 #include "host_protocol.h"
 
 #include <string.h>
+#include <Esp.h>
 
+#include "app_config.h"
 #include "app_types.h"
 #include "system_state.h"
+#include "event_log.h"
 
 static void printStatus() {
   SystemMode mode = SystemState_GetMode();
   SensorPattern pattern = SystemState_GetPattern();
   MotionState motion = SystemState_GetMotionState();
   InferenceResult inf = SystemState_GetLastInference();
+  ClassifierMode classifierMode = SystemState_GetClassifierMode();
 
   Serial.println();
   Serial.println("===== STATUS =====");
   Serial.print("Mode: ");
   Serial.println(modeToString(mode));
+  Serial.print("Classifier: ");
+  Serial.println(classifierModeToString(classifierMode));
   Serial.print("Sensor Pattern: ");
   Serial.println(patternToString(pattern));
   Serial.print("Motion State: ");
@@ -63,6 +69,106 @@ static void printStats() {
   Serial.println();
 }
 
+static void printHealth() {
+  SystemMode mode = SystemState_GetMode();
+  SystemStats s = SystemState_GetStats();
+  InferenceResult inf = SystemState_GetLastInference();
+
+  uint32_t now = millis();
+  uint32_t uptimeMs = now;
+  uint32_t freeHeap = ESP.getFreeHeap();
+
+  bool hasInference = (s.inferencesRun > 0);
+  uint32_t lastInferenceAgeMs = hasInference ? (now - inf.timestampMs) : 0;
+
+  uint32_t expectedInferencePeriodMs;
+
+  if (mode == MODE_LOW_POWER) {
+    expectedInferencePeriodMs =
+      APP_FEATURE_WINDOW_SIZE * APP_SENSOR_PERIOD_LOW_POWER_MS;
+  } else {
+    expectedInferencePeriodMs =
+      APP_FEATURE_WINDOW_SIZE * APP_SENSOR_PERIOD_NORMAL_MS;
+  }
+
+  uint32_t inferenceTimeoutMs =
+    expectedInferencePeriodMs + APP_HEALTH_INFERENCE_TIMEOUT_MARGIN_MS;
+
+  bool heapOk = freeHeap >= APP_HEALTH_MIN_FREE_HEAP_BYTES;
+  bool queueOk = (s.sampleQueueDrops == 0);
+  bool inferenceOk = hasInference && (lastInferenceAgeMs <= inferenceTimeoutMs);
+
+  bool healthOk = heapOk && queueOk && inferenceOk;
+
+  Serial.println();
+  Serial.println("===== HEALTH =====");
+
+  Serial.print("Status: ");
+  Serial.println(healthOk ? "OK" : "WARN");
+
+  Serial.print("Uptime: ");
+  Serial.print(uptimeMs);
+  Serial.println(" ms");
+
+  Serial.print("Mode: ");
+  Serial.println(modeToString(mode));
+
+  Serial.print("Free heap: ");
+  Serial.print(freeHeap);
+  Serial.println(" bytes");
+
+  Serial.print("Min heap threshold: ");
+  Serial.print(APP_HEALTH_MIN_FREE_HEAP_BYTES);
+  Serial.println(" bytes");
+
+  Serial.print("Inferences run: ");
+  Serial.println(s.inferencesRun);
+
+  if (hasInference) {
+    Serial.print("Last inference age: ");
+    Serial.print(lastInferenceAgeMs);
+    Serial.println(" ms");
+  } else {
+    Serial.println("Last inference age: N/A");
+  }
+
+  Serial.print("Expected inference period: ");
+  Serial.print(expectedInferencePeriodMs);
+  Serial.println(" ms");
+
+  Serial.print("Inference timeout: ");
+  Serial.print(inferenceTimeoutMs);
+  Serial.println(" ms");
+
+  Serial.print("Sample queue drops: ");
+  Serial.println(s.sampleQueueDrops);
+
+  Serial.print("Pipeline: ");
+  Serial.println(inferenceOk ? "ACTIVE" : "STALE");
+
+  if (!healthOk) {
+    Serial.println();
+    Serial.println("Warnings:");
+
+    if (!heapOk) {
+      Serial.println("  - Free heap below threshold");
+    }
+
+    if (!queueOk) {
+      Serial.println("  - Sample queue drops detected");
+    }
+
+    if (!hasInference) {
+      Serial.println("  - No inference result yet");
+    } else if (!inferenceOk) {
+      Serial.println("  - Inference pipeline timeout");
+    }
+  }
+
+  Serial.println("==================");
+  Serial.println();
+}
+
 static void dumpFeature() {
   FeatureWindow f = SystemState_GetLastFeature();
 
@@ -104,11 +210,16 @@ void HostProtocol_PrintHelp() {
   Serial.println("  HELP");
   Serial.println("  GET_STATUS");
   Serial.println("  GET_STATS");
+  Serial.println("  GET_HEALTH");
+  Serial.println("  GET_EVENT_LOG");
+  Serial.println("  CLEAR_EVENT_LOG");  
   Serial.println("  DUMP_FEATURE");
   Serial.println("  RESET_STATS");
   Serial.println("  SET_MODE NORMAL");
   Serial.println("  SET_MODE DEBUG");
   Serial.println("  SET_MODE LOW_POWER");
+  Serial.println("  SET_CLASSIFIER RULE");
+  Serial.println("  SET_CLASSIFIER MODEL");
   Serial.println("  SET_PATTERN STILL");
   Serial.println("  SET_PATTERN MOVING");
   Serial.println("  SET_PATTERN SHAKING");
@@ -139,6 +250,22 @@ void HostProtocol_ProcessLine(String line) {
     return;
   }
 
+  if (line == "GET_HEALTH") {
+    printHealth();
+    return;
+  }
+
+  if (line == "GET_EVENT_LOG") {
+    EventLog_Print();
+    return;
+  }
+
+  if (line == "CLEAR_EVENT_LOG") {
+    EventLog_Clear();
+    Serial.println("OK CLEAR_EVENT_LOG");
+    return;
+  }
+
   if (line == "DUMP_FEATURE") {
     dumpFeature();
     return;
@@ -164,6 +291,26 @@ void HostProtocol_ProcessLine(String line) {
       Serial.print("ERR Unknown mode: ");
       Serial.println(modeText);
       Serial.println("Valid modes: NORMAL, DEBUG, LOW_POWER");
+    }
+
+    return;
+  }
+
+  if (line.startsWith("SET_CLASSIFIER ")) {
+    String modeText = line.substring(strlen("SET_CLASSIFIER "));
+    modeText.trim();
+
+    ClassifierMode newClassifierMode;
+
+    if (parseClassifierMode(modeText, &newClassifierMode)) {
+      SystemState_SetClassifierMode(newClassifierMode);
+
+      Serial.print("OK SET_CLASSIFIER ");
+      Serial.println(classifierModeToString(newClassifierMode));
+    } else {
+      Serial.print("ERR Unknown classifier: ");
+      Serial.println(modeText);
+      Serial.println("Valid classifiers: RULE, MODEL");
     }
 
     return;

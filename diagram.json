@@ -3,9 +3,25 @@
   "author": "you",
   "editor": "wokwi",
   "parts": [
-    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
-    { "type": "board-ssd1306", "id": "oled1", "top": -100, "left": 220, "attrs": { "i2cAddress": "0x3c" } },
-    { "type": "wokwi-pushbutton", "id": "btn1", "top": 120, "left": 220, "attrs": {} }
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": -50, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 120, "left": 180, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 50, "left": 240, "attrs": {} },
+    { "type": "wokwi-led", "id": "hostLed", "top": -50, "left": 220, "attrs": { "color": "red" } },
+    { 
+        "type": "wokwi-mpu6050", 
+        "id": "imu1", 
+        "top": -100, 
+        "left": 120, 
+        "attrs": {
+            "accelX": "0",
+            "accelY": "0",
+            "accelZ": "1",
+            "rotationX": "0",
+            "rotationY": "0",
+            "rotationZ": "0",
+            "temperature": "24"
+        } 
+    }
   ],
   "connections": [
   [ "esp:TX0", "$serialMonitor:RX", "", [] ],
@@ -17,7 +33,15 @@
   [ "oled1:SCL", "esp:D22", "blue", [] ],
 
   [ "btn1:1.l", "esp:D18", "green", [] ],
-  [ "btn1:2.l", "esp:GND.1", "black", [] ]
+  [ "btn1:2.l", "esp:GND.1", "black", [] ],
+
+  [ "esp:D19", "hostLed:A", "orange", [] ],
+  [ "hostLed:C", "esp:GND.1", "black", [] ],
+
+  [ "imu1:VCC", "esp:3V3", "red", [] ],
+    [ "imu1:GND", "esp:GND.1", "black", [] ],
+    [ "imu1:SDA", "esp:D21", "green", [] ],
+    [ "imu1:SCL", "esp:D22", "blue", [] ]
 ],
   
 

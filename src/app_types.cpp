@@ -93,3 +93,45 @@ bool parsePattern(const String& text, SensorPattern* patternOut) {
 
   return false;
 }
+
+const char* eventReasonToString(EventReason reason) {
+  switch (reason) {
+    case EVENT_REASON_FIRST_RESULT:
+      return "FIRST_RESULT";
+    case EVENT_REASON_STATE_CHANGE:
+      return "STATE_CHANGE";
+    case EVENT_REASON_HIGH_PRIORITY_IMPACT:
+      return "HIGH_PRIORITY_IMPACT";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+const char* classifierModeToString(ClassifierMode mode) {
+  switch (mode) {
+    case CLASSIFIER_RULE:
+      return "RULE";
+    case CLASSIFIER_MODEL:
+      return "MODEL";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+bool parseClassifierMode(const String& text, ClassifierMode* modeOut) {
+  if (modeOut == nullptr) {
+    return false;
+  }
+
+  if (text == "RULE") {
+    *modeOut = CLASSIFIER_RULE;
+    return true;
+  }
+
+  if (text == "MODEL") {
+    *modeOut = CLASSIFIER_MODEL;
+    return true;
+  }
+
+  return false;
+}
