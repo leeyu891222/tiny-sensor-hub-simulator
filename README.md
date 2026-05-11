@@ -1,456 +1,311 @@
 # TinyML Sensor Hub Simulator
 
-An RTOS-based simulated mobile sensor hub firmware project built with **ESP32 + FreeRTOS + Wokwi**.
+A firmware-style sensor hub demo that simulates how a low-power MCU can process motion sensor data locally, run lightweight inference, and notify a host CPU only when meaningful events occur.
 
-This project demonstrates how a low-power sensor hub can process high-frequency raw sensor data locally, extract compact features, run lightweight motion-event classification, and notify the host CPU only when meaningful events occur.
-
-The goal is not to build a complex AI model first. The main focus is to demonstrate solid embedded firmware fundamentals: RTOS task design, queues, ISR-to-task handoff, shared-state protection, driver/service-style modularization, host communication, and event-driven system design.
+This project is designed as a **firmware engineering portfolio project**. It focuses on RTOS task design, queue-based data pipelines, ISR-to-task handoff, host communication, event logging, system health monitoring, and a lightweight inference backend suitable for a tiny system / sensor hub scenario.
 
 ---
 
-## Motivation
+## 1. Project Overview
 
-Modern mobile devices often include a low-power microcontroller, DSP, or sensor hub responsible for always-on sensing tasks. Instead of waking the main ARM application processor for every sensor sample, the sensor hub can:
+The project simulates a mobile-device-style sensor hub:
 
-- collect raw sensor data,
-- perform local filtering and feature extraction,
-- classify motion or context events,
-- notify the host CPU only when important events occur.
+- ESP32 acts as the **Sensor Hub MCU**.
+- Serial Monitor acts as the **Host CPU / AP driver interface**.
+- MPU6050 is included in the Wokwi diagram to show the intended IMU topology.
+- OLED displays runtime status.
+- Button switches system mode through a GPIO interrupt.
+- LED simulates a **host interrupt line** asserted when the sensor hub has an event for the host.
 
-This reduces host wakeups, lowers power consumption, and allows always-on sensing behavior such as raise-to-wake, pocket detection, activity recognition, impact detection, and context-aware power management.
+![Wokwi hardware diagram](docs/images/sensorhub-tinysys.png)
 
-This project simulates that idea using an ESP32 in Wokwi.
-
----
-
-## Current Features
-
-- ESP32-based simulated sensor hub
-- FreeRTOS task pipeline
-- Mock accelerometer data generation
-- Motion patterns:
-  - `STILL`
-  - `MOVING`
-  - `SHAKING`
-  - `IMPACT`
-- Window-based feature extraction
-- Rule-based lightweight classifier baseline
-- Event manager that suppresses unnecessary host notifications
-- UART/Serial host command interface
-- OLED display for current system state
-- Button interrupt for mode switching
-- Mutex-protected shared system state
-- Queue-based inter-task communication
-- Runtime statistics showing notification reduction
+> **Note on the MPU6050:** The Wokwi diagram includes an MPU6050 IMU to show the intended I2C sensor topology. The current demo uses a simulated sensor backend (`sensor_sim`) to generate motion patterns such as `STILL`, `MOVING`, `SHAKING`, and `IMPACT`. This is intentional because the simulator IMU does not provide realistic phone-like dynamic motion interaction. The firmware is structured so the simulated backend can later be replaced by a real I2C IMU driver without changing the feature extraction, inference, or event manager pipeline.
 
 ---
 
-## System Architecture
+## 2. Motivation
 
-```text
-Host CPU / Serial Terminal
-        ^
-        |
-        | UART commands / event notifications
-        |
-+-------+------------------------------------------------+
-|                 Sensor Hub Firmware                    |
-|                                                        |
-|  HostCommTask                                          |
-|      |                                                 |
-|      v                                                 |
-|  host_protocol                                         |
-|                                                        |
-|  SensorTask                                            |
-|      | mock raw ax/ay/az samples                       |
-|      v                                                 |
-|  sampleQueue                                           |
-|      v                                                 |
-|  FeatureTask                                           |
-|      | mean / variance / energy / max_abs              |
-|      v                                                 |
-|  featureQueue                                          |
-|      v                                                 |
-|  InferenceTask                                         |
-|      | rule-based lightweight classification            |
-|      v                                                 |
-|  inferenceQueue                                        |
-|      v                                                 |
-|  EventManagerTask                                      |
-|      | notify host only on meaningful events            |
-|      v                                                 |
-|  Serial EVENT output                                   |
-|                                                        |
-|  DisplayTask -> OLED                                   |
-|  Button ISR -> ButtonTask -> mode switching            |
-+--------------------------------------------------------+
+In a phone-like architecture, the main ARM application processor is powerful but relatively power hungry. Many sensing tasks do not require the main CPU to stay awake continuously.
+
+A sensor hub can:
+
+- continuously process low-rate or always-on sensor data,
+- convert raw samples into higher-level events,
+- suppress unimportant repeated states,
+- notify the host only when necessary,
+- reduce host CPU wakeups and improve power efficiency.
+
+This project demonstrates that concept using a simulated RTOS-based firmware pipeline.
+
+---
+
+## 3. System Overview
+
+```mermaid
+flowchart LR
+    IMU[MPU6050 IMU<br/>I2C topology demo] --> HUB[ESP32 Sensor Hub MCU]
+
+    HUB --> OLED[OLED Display<br/>I2C]
+    BTN[Button<br/>GPIO Interrupt] --> HUB
+
+    HUB --> HOSTINT[Host Interrupt Line<br/>GPIO19 Pulse / LED]
+    HUB <--> HOST[Host CPU Simulator<br/>UART / Serial Monitor]
 ```
 
+The host can send commands through Serial, while the sensor hub reports meaningful motion events and pulses the host interrupt line.
+
 ---
 
-## RTOS Task Design
+## 4. RTOS Data Pipeline
 
-| Task | Responsibility |
+```mermaid
+flowchart TD
+    SensorTask[SensorTask<br/>Generate mock ax/ay/az] -->|SensorSample| SampleQueue[sampleQueue]
+
+    SampleQueue --> FeatureTask[FeatureTask<br/>Windowing + feature extraction]
+    FeatureTask -->|FeatureWindow| FeatureQueue[featureQueue]
+
+    FeatureQueue --> InferenceTask[InferenceTask<br/>Rule / Model classifier]
+    InferenceTask -->|InferenceResult| InferenceQueue[inferenceQueue]
+
+    InferenceQueue --> EventManagerTask[EventManagerTask<br/>Notification policy]
+
+    EventManagerTask --> HostProtocol[Serial EVENT message]
+    EventManagerTask --> HostInterrupt[Host interrupt pulse]
+    EventManagerTask --> EventLog[Event log ring buffer]
+```
+
+The important design idea is that raw sensor samples are processed locally inside the sensor hub. The host CPU only receives high-level events.
+
+---
+
+## 5. Firmware Module Architecture
+
+```mermaid
+flowchart TB
+    Main[main.cpp<br/>RTOS orchestration] --> SensorSim[sensor_sim]
+    Main --> FeatureExtractor[feature_extractor]
+    Main --> ClassifierRule[classifier_rule]
+    Main --> ClassifierModel[classifier_model]
+    Main --> EventManager[event_manager]
+    Main --> HostProtocol[host_protocol]
+    Main --> DisplayService[display_service]
+    Main --> HostInterrupt[host_interrupt]
+    Main --> SystemState[system_state]
+    Main --> EventLog[event_log]
+
+    EventManager --> SystemState
+    EventManager --> EventLog
+    EventManager --> HostInterrupt
+
+    HostProtocol --> SystemState
+    HostProtocol --> EventLog
+
+    DisplayService --> SystemState
+```
+
+### Module responsibilities
+
+| Module | Responsibility |
 |---|---|
-| `SensorTask` | Generates mock accelerometer samples at a configurable sampling rate. |
-| `FeatureTask` | Collects a sample window and computes statistical features. |
-| `InferenceTask` | Runs the lightweight rule-based classifier. |
-| `EventManagerTask` | Decides whether the host CPU should be notified. |
-| `HostCommTask` | Receives and parses host commands over Serial/UART. |
-| `DisplayTask` | Periodically updates the OLED display. |
-| `ButtonTask` | Handles button events deferred from GPIO interrupt. |
+| `app_config` | Project-level config: pins, queue sizes, sampling periods, task priorities |
+| `app_types` | Shared enums, structs, string helpers, parser helpers |
+| `system_state` | Shared runtime state with mutex-protected access |
+| `sensor_sim` | Mock accelerometer backend generating `ax/ay/az` samples |
+| `feature_extractor` | Converts raw sample windows into compact statistical features |
+| `classifier_rule` | Rule-based baseline classifier |
+| `classifier_model` | Lightweight prototype-model classifier, if enabled |
+| `event_manager` | Decides whether an inference result should notify the host |
+| `event_log` | Fixed-size event ring buffer for recent host notifications |
+| `host_interrupt` | GPIO pulse simulating host CPU interrupt / wakeup |
+| `host_protocol` | UART/Serial command parsing and host responses |
+| `display_service` | OLED initialization and display updates |
+| `main.cpp` | RTOS queue creation, task orchestration, ISR setup, module initialization |
 
-The task pipeline uses FreeRTOS queues:
+---
+
+## 6. Host Notification Model
+
+```mermaid
+sequenceDiagram
+    participant SensorHub as Sensor Hub MCU
+    participant EventMgr as EventManager
+    participant Log as Event Log Buffer
+    participant GPIO as Host INT GPIO
+    participant Host as Host CPU / Driver
+
+    SensorHub->>EventMgr: InferenceResult
+    EventMgr->>EventMgr: Decide shouldNotify
+    EventMgr->>Log: Store EventRecord
+    EventMgr->>GPIO: Pulse HOST_INT
+    GPIO->>Host: Wake / interrupt host
+    Host->>SensorHub: GET_EVENT_LOG
+    SensorHub->>Host: Return recent event records
+```
+
+When the EventManager decides an event should be reported, it first stores detailed event context in the event log, then asserts the simulated host interrupt line. This models a common sensor hub pattern where the host CPU is interrupted and later reads event details from a mailbox, FIFO, or driver-facing buffer.
+
+---
+
+## 7. Motion Patterns
+
+The current demo uses simulated accelerometer data.
+
+| Pattern | Meaning | Simulated behavior |
+|---|---|---|
+| `STILL` | Phone is stationary | `az ≈ 1g`, small noise |
+| `MOVING` | General motion | Moderate periodic acceleration changes |
+| `SHAKING` | Strong shaking | High variance and high energy signal |
+| `IMPACT` | Impact / drop-like event | Mostly still, with periodic acceleration spikes |
+
+The host can change the simulated pattern:
 
 ```text
-SensorTask -> sampleQueue -> FeatureTask
-FeatureTask -> featureQueue -> InferenceTask
-InferenceTask -> inferenceQueue -> EventManagerTask
+SET_PATTERN STILL
+SET_PATTERN MOVING
+SET_PATTERN SHAKING
+SET_PATTERN IMPACT
 ```
 
 ---
 
-## Firmware Concepts Demonstrated
+## 8. Feature Extraction
 
-### GPIO Interrupt and ISR-to-Task Handoff
+The firmware collects a window of raw samples and computes compact features:
 
-The button is configured as an active-low GPIO input using internal pull-up. The ISR does not perform mode switching directly. It only notifies `ButtonTask` using a FreeRTOS task notification.
+- `meanX`, `meanY`, `meanZ`
+- `varX`, `varY`, `varZ`
+- `energy`
+- `maxAbs`
+
+In normal mode:
 
 ```text
-Button falling edge
-    -> buttonISR()
-    -> vTaskNotifyGiveFromISR()
-    -> ButtonTask handles debounce and mode switching
+50 Hz sampling
+50 samples per feature window
+≈ 1 inference per second
 ```
 
-This demonstrates the firmware design principle:
+In low-power mode:
 
-> ISR should be short and defer real work to task context.
-
----
-
-### Queue-Based Data Pipeline
-
-Raw sensor samples are not processed directly inside `SensorTask`. Instead, each stage communicates through FreeRTOS queues.
-
-This makes the pipeline modular and closer to real sensor-hub firmware design.
+```text
+10 Hz sampling
+50 samples per feature window
+≈ 1 inference every 5 seconds
+```
 
 ---
 
-### Mutex-Protected Shared State
+## 9. Inference Backends
 
-Runtime state is centralized in `system_state` and accessed through mutex-protected APIs.
+The project supports an inference abstraction so the pipeline does not depend on a single classifier implementation.
 
-Shared state includes:
+### Rule-based classifier
 
-- current mode,
-- current sensor pattern,
-- current motion state,
-- latest feature window,
-- latest inference result,
-- runtime statistics.
+The rule-based classifier uses explicit thresholds:
 
-This prevents direct uncontrolled access to global variables from multiple RTOS tasks.
+```text
+maxAbs high        -> IMPACT
+energy/variance high -> SHAKING
+variance medium   -> MOVING
+otherwise         -> STILL
+```
+
+### Model-based classifier
+
+The model-based classifier is intentionally lightweight. It uses hand-calibrated class prototypes stored as constant arrays and compares normalized feature vectors against these prototypes.
+
+This is not a trained neural network. It is a small model-based inference backend intended to demonstrate how sensor hub firmware can switch between inference implementations without changing the RTOS pipeline.
+
+Commands:
+
+```text
+SET_CLASSIFIER RULE
+SET_CLASSIFIER MODEL
+```
 
 ---
 
-### I2C Display Service
+## 10. System Modes
 
-The OLED display is managed through `display_service`. I2C access is protected internally with a mutex.
+| Mode | Behavior |
+|---|---|
+| `NORMAL` | 50 Hz sampling, event-based host notification |
+| `DEBUG` | 50 Hz sampling, prints every inference result |
+| `LOW_POWER` | 10 Hz sampling, lower sensing/inference frequency |
 
-Although the current sensor data is simulated, this structure allows future expansion where a real I2C IMU and the OLED may share the same I2C bus.
+The physical button cycles modes:
+
+```text
+NORMAL -> DEBUG -> LOW_POWER -> NORMAL
+```
+
+The button uses GPIO interrupt + task notification:
+
+```mermaid
+flowchart LR
+    Button[Button Falling Edge] --> ISR[buttonISR]
+    ISR --> Notify[vTaskNotifyGiveFromISR]
+    Notify --> ButtonTask[ButtonTask]
+    ButtonTask --> Debounce[Debounce + wait release]
+    Debounce --> Mode[Switch system mode]
+```
 
 ---
 
-### Host Communication Protocol
+## 11. Host Commands
 
-The host CPU is simulated using a UART/Serial terminal. The host can configure the sensor hub and query status.
-
-Supported commands:
+Supported Serial commands:
 
 ```text
 HELP
 GET_STATUS
 GET_STATS
+GET_HEALTH
+GET_EVENT_LOG
+CLEAR_EVENT_LOG
 DUMP_FEATURE
 RESET_STATS
 SET_MODE NORMAL
 SET_MODE DEBUG
 SET_MODE LOW_POWER
+SET_CLASSIFIER RULE
+SET_CLASSIFIER MODEL
 SET_PATTERN STILL
 SET_PATTERN MOVING
 SET_PATTERN SHAKING
 SET_PATTERN IMPACT
 ```
 
-This models how a host processor might configure or query a sensor hub.
-
----
-
-## Sensor Simulation
-
-The project currently uses mock accelerometer data instead of a physical IMU.
-
-Each generated sample contains:
-
-```cpp
-struct SensorSample {
-  float ax;
-  float ay;
-  float az;
-  uint32_t timestampMs;
-};
-```
-
-The simulated sensor backend supports these patterns:
-
-### STILL
-
-A stable phone-like state with small noise:
-
-```text
-ax ≈ 0g
-ay ≈ 0g
-az ≈ 1g
-```
-
-### MOVING
-
-Moderate periodic movement with medium variance.
-
-### SHAKING
-
-High-energy movement with large variance.
-
-### IMPACT
-
-Mostly stable motion with periodic high acceleration peaks.
-
-This is useful for validating the firmware pipeline without requiring physical hardware.
-
----
-
-## Feature Extraction
-
-`FeatureTask` collects a fixed-size window of raw accelerometer samples and computes:
-
-- mean X/Y/Z,
-- variance X/Y/Z,
-- average energy,
-- max acceleration magnitude,
-- window start and end time.
-
-The current window size is configured in `app_config.h`:
-
-```cpp
-#define APP_FEATURE_WINDOW_SIZE 50
-```
-
-At 50 Hz sampling, 50 samples represent approximately 1 second of sensor data.
-
----
-
-## Lightweight Classifier Baseline
-
-The current classifier is rule-based and intentionally simple.
-
-It uses:
-
-- `maxAbs` to detect `IMPACT`,
-- `energy` and total variance to detect `SHAKING`,
-- moderate variance to detect `MOVING`,
-- low variance to detect `STILL`.
-
-This is implemented in `classifier_rule.cpp`.
-
-This module is designed to be replaceable. A future version can add:
-
-- logistic regression,
-- decision tree,
-- small MLP,
-- TensorFlow Lite Micro model.
-
-The rest of the firmware pipeline does not need to change significantly.
-
----
-
-## Event Filtering and Host Notification
-
-`event_manager` decides whether to notify the host.
-
-Current policy:
-
-- notify on the first inference result,
-- notify when motion state changes,
-- always notify `IMPACT` because it is high priority,
-- suppress repeated non-critical states.
-
-This demonstrates the core sensor hub value:
-
-> Process many raw samples locally, but notify the host only when needed.
-
-Example runtime statistics:
-
-```text
-Samples generated: 1954
-Features computed: 39
-Inferences run: 39
-Host notifications: 8
-Suppressed notifications: 31
-Sample queue drops: 0
-Notify/sample ratio: 0.409%
-Estimated wakeup reduction: 99.591%
-```
-
----
-
-## Project Structure
-
-```text
-include/
-  app_config.h          Project-level configuration
-  app_types.h           Shared enums, structs, parsing/string helpers
-  system_state.h        Mutex-protected shared runtime state
-  sensor_sim.h          Simulated accelerometer backend
-  feature_extractor.h   Raw sample window -> feature window
-  classifier_rule.h     Rule-based lightweight classifier
-  event_manager.h       Host notification policy
-  host_protocol.h       Host command parser
-  display_service.h     OLED display service
-
-src/
-  main.cpp              RTOS task orchestration, ISR, setup/loop
-  app_types.cpp
-  system_state.cpp
-  sensor_sim.cpp
-  feature_extractor.cpp
-  classifier_rule.cpp
-  event_manager.cpp
-  host_protocol.cpp
-  display_service.cpp
-```
-
----
-
-## Configuration
-
-Most project-level settings are centralized in `app_config.h`:
-
-```cpp
-#define APP_BUTTON_PIN 18
-#define APP_I2C_SDA_PIN 21
-#define APP_I2C_SCL_PIN 22
-
-#define APP_SAMPLE_QUEUE_LEN 64
-#define APP_FEATURE_QUEUE_LEN 4
-#define APP_INFERENCE_QUEUE_LEN 4
-
-#define APP_FEATURE_WINDOW_SIZE 50
-
-#define APP_SENSOR_PERIOD_NORMAL_MS 20
-#define APP_SENSOR_PERIOD_LOW_POWER_MS 100
-```
-
-This avoids scattering magic numbers throughout the project.
-
----
-
-## Hardware Simulation
-
-Current Wokwi components:
-
-- ESP32 DevKit
-- SSD1306 I2C OLED
-- Pushbutton
-- Serial terminal
-
-Recommended wiring:
-
-| Component | ESP32 Pin |
-|---|---|
-| OLED VCC | 3V3 |
-| OLED GND | GND |
-| OLED SDA | GPIO21 / D21 |
-| OLED SCL | GPIO22 / D22 |
-| Button side A | GPIO18 / D18 |
-| Button side B | GND |
-| Serial TX | TX0 |
-| Serial RX | RX0 |
-
----
-
-## How to Run
-
-### 1. Build with PlatformIO
-
-```bash
-pio run
-```
-
-### 2. Start Wokwi Simulator
-
-Open `diagram.json` and start the Wokwi simulator from VS Code.
-
-### 3. Use Serial Terminal
-
-Run commands such as:
+### Example: status
 
 ```text
 GET_STATUS
-SET_PATTERN MOVING
-DUMP_FEATURE
-SET_PATTERN SHAKING
-SET_PATTERN IMPACT
-GET_STATS
-SET_MODE DEBUG
-SET_PATTERN STILL
 ```
 
----
-
-## Demo Script
-
-A recommended demo sequence:
+Example output:
 
 ```text
-GET_STATUS
-SET_PATTERN MOVING
-DUMP_FEATURE
-SET_PATTERN SHAKING
-SET_PATTERN IMPACT
-GET_STATS
-SET_MODE DEBUG
-SET_PATTERN STILL
+===== STATUS =====
+Mode: NORMAL
+Classifier: RULE
+Sensor Pattern: MOVING
+Motion State: MOVING
+Confidence: 0.800
+Energy: 1.063
+Max Abs: 1.201
+==================
 ```
 
-Expected behavior:
-
-1. `GET_STATUS` shows the current mode, sensor pattern, motion state, confidence, energy, and max acceleration.
-2. `SET_PATTERN MOVING` causes the pipeline to classify movement.
-3. `DUMP_FEATURE` shows extracted window features.
-4. `SET_PATTERN SHAKING` increases energy and variance.
-5. `SET_PATTERN IMPACT` triggers high-priority impact notifications.
-6. `GET_STATS` shows how many raw samples were processed versus how many notifications were sent.
-7. `SET_MODE DEBUG` enables additional inference logging.
-
----
-
-## Example Output
+### Example: stats
 
 ```text
-Booting TinyML Sensor Hub Simulator...
-System started.
-EVENT MOTION STILL -> STILL conf=0.90 energy=1.00 max=1.02
+GET_STATS
+```
 
-OK SET_PATTERN MOVING
-EVENT MOTION STILL -> MOVING conf=0.80 energy=1.05 max=1.22
+Example output:
 
-OK SET_PATTERN SHAKING
-EVENT MOTION MOVING -> SHAKING conf=0.88 energy=1.74 max=2.07
-
-OK SET_PATTERN IMPACT
-EVENT MOTION SHAKING -> IMPACT conf=0.95 energy=2.13 max=4.26
-
+```text
 ===== STATS =====
 Samples generated: 1954
 Features computed: 39
@@ -463,63 +318,108 @@ Estimated wakeup reduction: 99.591%
 =================
 ```
 
----
-
-## Design Highlights
-
-### Firmware-Oriented Modularity
-
-The project is divided into separate modules for sensor simulation, feature extraction, classification, event management, host protocol, display service, and shared system state.
-
-### Replaceable Sensor Backend
-
-The current sensor backend is simulated, but upper layers only depend on the `SensorSample` abstraction. This makes it possible to replace the simulated backend with a real I2C IMU driver later.
-
-### Replaceable Classifier
-
-The current rule-based classifier is a baseline. A future `classifier_tiny` module can be added without changing the RTOS pipeline.
-
-### Host Wakeup Reduction
-
-Runtime statistics show the ratio between raw samples and host notifications. This directly demonstrates why sensor hubs are useful in mobile systems.
-
----
-
-## Future Work
-
-Potential next steps:
-
-1. Add an event cooldown policy for repeated `IMPACT` notifications.
-2. Replace rule-based classifier with a small logistic regression or decision tree model.
-3. Add a real I2C IMU driver backend.
-4. Add binary host protocol support:
-
-   ```text
-   Header | Length | Command | Payload | CRC
-   ```
-
-5. Add CRC / ACK / NACK handling to host protocol.
-6. Add watchdog and health monitoring.
-7. Add stack watermark / queue usage diagnostics.
-8. Port the firmware structure to Zephyr or ESP-IDF.
-9. Simulate host-processor communication using SPI/mailbox style abstraction.
-
----
-
-## Resume Description
+### Example: health
 
 ```text
-Built an RTOS-based simulated mobile sensor hub on ESP32/Wokwi. The firmware generates mock accelerometer streams, extracts statistical features, runs lightweight motion classification, and notifies the host CPU only on meaningful events. Implemented FreeRTOS task pipeline, queues, GPIO interrupt-to-task notification, mutex-protected shared state, UART host protocol, OLED display service, modular firmware architecture, and wakeup-reduction statistics.
+GET_HEALTH
 ```
+
+Reports runtime diagnostics such as uptime, free heap, pipeline activity, last inference age, and queue drops.
+
+### Example: event log
+
+```text
+GET_EVENT_LOG
+```
+
+Shows recently reported host events stored in the sensor hub ring buffer.
 
 ---
 
-## Interview Talking Points
+## 12. Event Log Ring Buffer
 
-- The sensor hub reduces host CPU wakeups by processing raw sensor samples locally.
-- RTOS queues decouple sampling, feature extraction, inference, and event management.
-- ISR is kept short and defers button handling to `ButtonTask`.
-- Shared state is centralized and protected by a mutex.
-- The classifier is intentionally modular so a future tiny ML model can replace the rule-based baseline.
-- The project currently uses mock sensor data, but the sensor backend is abstracted for future real IMU integration.
+The event log stores recent host notification events. A record includes:
 
+- timestamp
+- previous motion state
+- new motion state
+- confidence
+- energy
+- maximum acceleration magnitude
+- notification reason
+
+Example:
+
+```text
+===== EVENT LOG =====
+count=4 size=10
+[0] t=1020 reason=FIRST_RESULT STILL->STILL conf=0.90 energy=1.00 max=1.02
+[1] t=5240 reason=STATE_CHANGE STILL->MOVING conf=0.80 energy=1.05 max=1.22
+[2] t=8300 reason=STATE_CHANGE MOVING->SHAKING conf=0.88 energy=1.74 max=2.07
+[3] t=10420 reason=STATE_CHANGE SHAKING->IMPACT conf=0.95 energy=2.13 max=4.26
+=====================
+```
+
+The buffer is fixed-size and overwrites the oldest record when full. It does not use dynamic allocation.
+
+---
+
+## 13. Demo Script
+
+A simple demo sequence:
+
+```text
+GET_STATUS
+GET_HEALTH
+CLEAR_EVENT_LOG
+SET_PATTERN MOVING
+DUMP_FEATURE
+SET_PATTERN SHAKING
+SET_PATTERN IMPACT
+GET_STATS
+GET_EVENT_LOG
+SET_MODE DEBUG
+SET_PATTERN STILL
+```
+
+Expected behavior:
+
+- OLED updates the current mode and motion state.
+- Serial prints event notifications when motion state changes.
+- Host interrupt LED pulses when the sensor hub reports an event.
+- `GET_STATS` shows that host notifications are much fewer than raw samples.
+- `GET_EVENT_LOG` shows the recent host notification history.
+
+---
+
+## 14. Current Limitations
+
+- The MPU6050 in the Wokwi diagram is currently a hardware topology demo.
+- Raw motion samples are generated by `sensor_sim`, not read from the MPU6050.
+- The model-based classifier is a lightweight hand-calibrated prototype model, not a trained neural network.
+- Host communication currently uses text commands over Serial for demo readability.
+- The host CPU / OS driver is simulated by the Serial Monitor.
+
+---
+
+## 15. Future Work
+
+Potential extensions:
+
+- Replace `sensor_sim` with a real I2C IMU driver.
+- Train a tiny model and replace the prototype classifier.
+- Add event cooldown / rate limiting for repeated high-priority events.
+- Add binary host packet protocol with CRC.
+- Add register-map style host access.
+- Add sensor calibration and offset compensation.
+- Add watchdog or task heartbeat monitoring.
+
+---
+
+## 16. Interview Summary
+
+This project simulates a mobile sensor hub using an ESP32 and FreeRTOS. The firmware generates mock accelerometer samples, computes features, runs lightweight inference, and reports only meaningful events to a host CPU simulator. It demonstrates queue-based RTOS pipelines, GPIO interrupt handling, I2C display control, mutex-protected shared state, event filtering, host interrupt signaling, event logging, and runtime health diagnostics.
+
+A concise technical summary:
+
+> The sensor hub processes high-frequency raw sensor samples locally and converts them into high-level motion events. It only notifies the host on state changes or high-priority events, reducing unnecessary host wakeups. The firmware is split into embedded-style modules such as `sensor_sim`, `feature_extractor`, `classifier_rule`, `classifier_model`, `event_manager`, `event_log`, `host_interrupt`, `host_protocol`, and `system_state`.
