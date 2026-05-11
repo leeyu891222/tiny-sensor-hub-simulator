@@ -416,10 +416,3 @@ Potential extensions:
 
 ---
 
-## 16. Interview Summary
-
-This project simulates a mobile sensor hub using an ESP32 and FreeRTOS. The firmware generates mock accelerometer samples, computes features, runs lightweight inference, and reports only meaningful events to a host CPU simulator. It demonstrates queue-based RTOS pipelines, GPIO interrupt handling, I2C display control, mutex-protected shared state, event filtering, host interrupt signaling, event logging, and runtime health diagnostics.
-
-A concise technical summary:
-
-> The sensor hub processes high-frequency raw sensor samples locally and converts them into high-level motion events. It only notifies the host on state changes or high-priority events, reducing unnecessary host wakeups. The firmware is split into embedded-style modules such as `sensor_sim`, `feature_extractor`, `classifier_rule`, `classifier_model`, `event_manager`, `event_log`, `host_interrupt`, `host_protocol`, and `system_state`.
